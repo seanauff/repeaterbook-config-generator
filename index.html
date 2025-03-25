@@ -95,19 +95,24 @@
                         config += '    (\n';
                         config += '      {\n';
                         config += '        freqs = (' + freqs.map(f => Math.round(f * 1e6)).join(', ') + ');\n';
+                        config += '        modulation = "nfm";\n';
                         config += '        outputs:\n';
                         config += '        (\n';
                         config += '          {\n';
+                        config += '            disable = false;\n';
                         config += '            type = "file";\n';
-                        config += '            format = "mp3";\n';
-                        config += '            directory = "/home/user/audio";\n';
-                        config += '            filename_template = "repeater_%Y%m%d_%H%M%S";\n';
+                        config += '            directory = "/recordings";\n';
+                        config += '            filename_template = "recording";\n';
                         config += '            continuous = false;\n';
+                        config += '            split_on_transmission = true;\n';
+                        config += '            include_freq = true;\n';
+                        config += '            append = false;\n';
+                        config += '            dated_subdirectories = false;\n';
                         config += '          }\n';
                         config += '        );\n';
                         config += '      }\n';
                         config += '    );\n';
-                        config += '  })\n';
+                        config += '  }\n';
                         config += ');\n';
                     } else {
                         // Multichannel mode configuration
