@@ -12,7 +12,7 @@
 </head>
 <body>
     <h1>RTLSDR-Airband Config Generator</h1>
-    <p>Upload a RepeaterBook CSV file and select settings to generate an RTLSDR-Airband config file.</p>
+    <p>Upload a RepeaterBook CSV file and select settings to generate an RTLSDR-Airband config file. All processing is done in the browser.</p>
     <form onsubmit="event.preventDefault(); generateConfig();">
         <label>
             Upload CSV File:
@@ -130,12 +130,15 @@
                         }
 
                         config += `# Multichannel mode configuration\n`;
-                        config += `centerfreq = ${Math.round(centerFreq)};\n`;
                         config += 'devices: ({\n';
+                        config += '    disable = false;\n';
                         config += '    type = "rtlsdr";\n';
                         config += '    index = 0;\n';
                         config += '    gain = 25.4;\n';
+                        config += '    correction = 0;\n';
+                        config += '    mode = "multichannel";\n';
                         config += `    sample_rate = ${Math.round(sampleRate)};\n`;
+                        config += `    centerfreq = ${Math.round(centerFreq)};\n`;
                         config += '    channels: (\n';
                         freqData.forEach(item => {
                             const f = item.freq;
@@ -145,14 +148,19 @@
                                 .join(', ');
                             config += '        {\n';
                             config += `            # ${f.toFixed(5)} MHz: ${rowStr}\n`;
+                            config += `            disable = false;\n`;
                             config += `            freq = ${Math.round(f * 1e6)};\n`;
                             config += '            modulation = "nfm";\n';
                             config += '            outputs: ({\n';
+                            config += '                disable = false;\n';
                             config += '                type = "file";\n';
-                            config += '                format = "mp3";\n';
-                            config += '                directory = "/home/user/audio";\n';
-                            config += '                filename_template = "repeater_%Y%m%d_%H%M%S";\n';
+                            config += '                directory = "/recordings";\n';
+                            config += '                filename_template = "recording";\n';
                             config += '                continuous = false;\n';
+                            config += '                split_on_transmission = true;\n';
+                            config += '                include_freq = true;\n';
+                            config += '                append = false;\n';
+                            config += '                dated_subdirectories = false;\n';
                             config += '            })\n';
                             config += '        },\n';
                         });
