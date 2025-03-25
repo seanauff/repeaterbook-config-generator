@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RTLSDR-Airband Config Generator</title>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.0/papaparse.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        label { display: block; margin: 10px 0; }
+        #multichannel_options { margin-left: 20px; }
+    </style>
+</head>
+<body>
+    <h1>RTLSDR-Airband Config Generator</h1>
+    <p>Upload a RepeaterBook CSV file and select settings to generate an RTLSDR-Airband config file.</p>
+    <form onsubmit="event.preventDefault(); generateConfig();">
+        <label>
+            Upload CSV File:
+            <input type="file" id="csv_file" accept=".csv" required>
+        </label>
+        <label>
+            Mode:
+            <select id="mode">
+                <option value="scan">Scan</option>
+                <option value="multichannel">Multichannel</option>
+            </select>
+        </label>
+        <div id="multichannel_options" style="display: none;">
+            <label>
+                Center Frequency (MHz, optional):
+                <input type="number" step="0.001" id="center_freq" placeholder="e.g., 146.5">
+            </label>
+            <label>
+                Sample Rate (Msps, default 2.4):
+                <input type="number" step="0.1" id="sample_rate" value="2.4">
+            </label>
+        </div>
+        <button type="submit">Generate Config</button>
+    </form>
+    <a id="download_link" style="display: none; margin-top: 20px;">Download Config</a>
+
+    <script>
+        // Show/hide multichannel options based on mode selection
+        document.getElementById('mode').addEventListener('change', function() {
+            document.getElementById('multichannel_options').style.display = 
+                this.value === 'multichannel' ? 'block' : 'none';
+        });
+
+        function generateConfig() {
+            const file = document.getElementById('csv_file').files[0];
+            if (!file) {
+                alert('Please upload a CSV file.');
+                return;
+            }
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    // Extract and sort frequencies with their data
+                    const freqData = results.data
+                        .map(row => ({
+                            freq: parseFloat(row['Freq']),
+                            data: row
+                        }))
+                        .filter(item => !isNaN(item.freq))
+                        .sort((a, b) => a.freq - b.freq);
+
+                    const freqs = freqData.map(item => item.freq);
+                    const mode = document.getElementById('mode').value;
+                    let config = '';
+
+                    if (mode === 'scan') {
+                        // Scan mode configuration
+                        config += '# Scan mode configuration\n';
+                        config += '# Frequency data:\n';
+                        freqData.forEach(item => {
+                            const f = item.freq;
+                            const rowStr = Object.entries(item.data)
+                                .filter(([k]) => k !== 'Freq')
+                                .map(([k, v]) => `${k}=${v}`)
+                                .join(', ');
+                            config += `# ${f.toFixed(5)} MHz: ${rowStr}\n`;
+                        });
+                        config += 'devices: ({\n';
+                        config += '    type = "rtlsdr";\n';
+                        config += '    index = 0;\n';
+                        config += '    gain = 25.4;\n';
+                        config += '    mode = "scan";\n';
+                        config += '    channels: ({\n';
+                        config += '        freqs = (' + freqs.map(f => Math.round(f * 1e6)).join(', ') + ');\n';
+                        config += '        outputs: ({\n';
+                        config += '            type = "file";\n';
+                        config += '            format = "mp3";\n';
+                        config += '            directory = "/home/user/audio";\n';
+                        config += '            filename_template = "repeater_%Y%m%d_%H%M%S";\n';
+                        config += '            continuous = false;\n';
+                        config += '        })\n';
+                        config += '    })\n';
+                        config += '})\n';
+                    } else {
+                        // Multichannel mode configuration
+                        let centerFreq = document.getElementById('center_freq').value;
+                        const sampleRate = parseFloat(document.getElementById('sample_rate').value || 2.4) * 1e6; // Hz
+
+                        if (centerFreq) {
+                            centerFreq = parseFloat(centerFreq) * 1e6; // Hz
+                        } else {
+                            // Calculate optimal center frequency
+                            let maxCount = 0;
+                            let bestCenter = 0;
+                            for (let i = 0; i < freqs.length; i++) {
+                                const low = freqs[i] * 1e6;
+                                const high = low + sampleRate;
+                                const count = freqs.filter(f => f * 1e6 >= low && f * 1e6 <= high).length;
+                                if (count > maxCount) {
+                                    maxCount = count;
+                                    bestCenter = (low + high) / 2;
+                                }
+                            }
+                            centerFreq = bestCenter;
+                        }
+
+                        // Check which frequencies are within bandwidth
+                        const minFreq = centerFreq - sampleRate / 2;
+                        const maxFreq = centerFreq + sampleRate / 2;
+                        const withinBandwidth = freqs.filter(f => f * 1e6 >= minFreq && f * 1e6 <= maxFreq);
+                        if (withinBandwidth.length < freqs.length) {
+                            config += `# Warning: Only ${withinBandwidth.length} of ${freqs.length} frequencies are within the ${sampleRate / 1e6} MHz bandwidth.\n`;
+                        }
+
+                        config += `# Multichannel mode configuration\n`;
+                        config += `centerfreq = ${Math.round(centerFreq)};\n`;
+                        config += 'devices: ({\n';
+                        config += '    type = "rtlsdr";\n';
+                        config += '    index = 0;\n';
+                        config += '    gain = 25.4;\n';
+                        config += `    sample_rate = ${Math.round(sampleRate)};\n`;
+                        config += '    channels: (\n';
+                        freqData.forEach(item => {
+                            const f = item.freq;
+                            const rowStr = Object.entries(item.data)
+                                .filter(([k]) => k !== 'Freq')
+                                .map(([k, v]) => `${k}=${v}`)
+                                .join(', ');
+                            config += '        {\n';
+                            config += `            # ${f.toFixed(5)} MHz: ${rowStr}\n`;
+                            config += `            freq = ${Math.round(f * 1e6)};\n`;
+                            config += '            modulation = "nfm";\n';
+                            config += '            outputs: ({\n';
+                            config += '                type = "file";\n';
+                            config += '                format = "mp3";\n';
+                            config += '                directory = "/home/user/audio";\n';
+                            config += '                filename_template = "repeater_%Y%m%d_%H%M%S";\n';
+                            config += '                continuous = false;\n';
+                            config += '            })\n';
+                            config += '        },\n';
+                        });
+                        config += '    )\n';
+                        config += '})\n';
+                    }
+
+                    // Create downloadable file
+                    const blob = new Blob([config], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const downloadLink = document.getElementById('download_link');
+                    downloadLink.href = url;
+                    downloadLink.download = 'rtlsdr_airband.conf';
+                    downloadLink.style.display = 'block';
+                    downloadLink.textContent = 'Download rtlsdr_airband.conf';
+                },
+                error: function(error) {
+                    alert('Error parsing CSV: ' + error);
+                }
+            });
+        }
+    </script>
+</body>
+</html>
