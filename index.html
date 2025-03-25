@@ -159,7 +159,9 @@
                         config += `    centerfreq = ${Math.round(centerFreq)}; # [${minFreq}-${maxFreq}]\n`;
                         config += '    channels:\n';
                         config += '    (\n';
-                        freqData.forEach(item => {
+                        // Build channel blocks without trailing comma on the last one
+                        for (let i = 0; i < freqData.length; i++) {
+                            const item = freqData[i];
                             const f = item.freq;
                             const rowStr = Object.entries(item.data)
                                 .filter(([k]) => k !== 'Freq')
@@ -184,8 +186,14 @@
                             config += '            dated_subdirectories = false;\n';
                             config += '          }\n';
                             config += '        );\n';
-                            config += '      },\n';
-                        });
+                            config += '      }';
+                            // Add comma only if it's not the last item
+                            if (i < freqData.length - 1) {
+                                config += ',\n';
+                            } else {
+                                config += '\n';
+                            }
+                        }
                         config += '    );\n';
                         config += '  }\n';
                         config += ');\n';
