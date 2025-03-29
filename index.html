@@ -35,184 +35,221 @@
                 <input type="number" step="0.1" id="sample_rate" value="2.4">
             </label>
         </div>
-        <button type="submit">Generate Config</button>
+        <div id="message" style="margin-top: 20px; color: red;"></div>
+        <button type="submit" id="generate">Generate Config</button>
     </form>
     <a id="download_link" style="display: none; margin-top: 20px;">Download Config</a>
 
     <script>
-        // Show/hide multichannel options based on mode selection
+        let freqData = []; // Global variable to store parsed frequency data
+
+        // Function to calculate and set the ideal center frequency
+        function calculateAndSetCenterFreq() {
+            if (freqData.length === 0) return;
+            const sampleRate = parseFloat(document.getElementById('sample_rate').value || 2.4) * 1e6; // Hz
+            const freqs = freqData.map(item => item.freq);
+            let maxCount = 0;
+            let bestCenter = 0;
+            // Find the center frequency that maximizes the number of frequencies within bandwidth
+            for (let i = 0; i < freqs.length; i++) {
+                const low = freqs[i] * 1e6;
+                const high = low + sampleRate;
+                const count = freqs.filter(f => f * 1e6 >= low && f * 1e6 <= high).length;
+                if (count > maxCount) {
+                    maxCount = count;
+                    bestCenter = (low + high) / 2;
+                }
+            }
+            const centerFreqMHz = (bestCenter / 1e6).toFixed(3);
+            document.getElementById('center_freq').value = centerFreqMHz;
+        }
+        
+        // Event listener for CSV file upload
+        document.getElementById('csv_file').addEventListener('change', function() {
+            const file = this.files[0];
+            if (file) {
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        freqData = results.data
+                            .map(row => ({
+                                freq: parseFloat(row['Freq']),
+                                data: row
+                            }))
+                            .filter(item => !isNaN(item.freq))
+                            .sort((a, b) => a.freq - b.freq);
+                        if (document.getElementById('mode').value === 'multichannel') {
+                            calculateAndSetCenterFreq();
+                        }
+                    },
+                    error: function(error) {
+                        alert('Error parsing CSV: ' + error);
+                    }
+                });
+            } else {
+                freqData = [];
+            }
+        });
+        
+        // Event listener for mode change
         document.getElementById('mode').addEventListener('change', function() {
             document.getElementById('multichannel_options').style.display = 
                 this.value === 'multichannel' ? 'block' : 'none';
+            if (this.value === 'multichannel' && freqData.length > 0) {
+                calculateAndSetCenterFreq();
+            }
+        });
+        
+        // Event listener for sample rate change
+        document.getElementById('sample_rate').addEventListener('change', function() {
+            if (document.getElementById('mode').value === 'multichannel' && freqData.length > 0) {
+                calculateAndSetCenterFreq();
+            }
         });
 
         function generateConfig() {
-            const file = document.getElementById('csv_file').files[0];
-            if (!file) {
+            if (freqData.length === 0) {
                 alert('Please upload a CSV file.');
                 return;
             }
+            const mode = document.getElementById('mode').value;
+            let config = '';
+            document.getElementById('message').textContent = ''; // Clear previous messages
 
-            Papa.parse(file, {
-                header: true,
-                skipEmptyLines: true,
-                complete: function(results) {
-                    // Extract and sort frequencies with their data
-                    const freqData = results.data
-                        .map(row => ({
-                            freq: parseFloat(row['Freq']),
-                            data: row
-                        }))
-                        .filter(item => !isNaN(item.freq))
-                        .sort((a, b) => a.freq - b.freq);
-
-                    const freqs = freqData.map(item => item.freq);
-                    const mode = document.getElementById('mode').value;
-                    let config = '';
-
-                    if (mode === 'scan') {
-                        // Scan mode configuration
-                        config += '# Scan mode configuration\n';
-                        config += '# Frequency data:\n';
-                        freqData.forEach(item => {
-                            const f = item.freq;
-                            const rowStr = Object.entries(item.data)
-                                .filter(([k]) => k !== 'Freq')
-                                .map(([k, v]) => `${k}=${v}`)
-                                .join(', ');
-                            config += `# ${f.toFixed(5)} MHz: ${rowStr}\n`;
-                        });
-                        config += 'devices:\n';
-                        config += '(\n';
-                        config += '  {\n';
-                        config += '    disable = false;\n';
-                        config += '    type = "rtlsdr";\n';
-                        config += '    index = 0;\n';
-                        config += '    gain = 25.4;\n';
-                        config += '    correction = 0;\n';
-                        config += '    mode = "scan";\n';
-                        config += '    channels:\n';
-                        config += '    (\n';
-                        config += '      {\n';
-                        config += '        freqs = (' + freqs.map(f => Math.round(f * 1e6)).join(', ') + ');\n';
-                        config += '        modulation = "nfm";\n';
-                        config += '        outputs:\n';
-                        config += '        (\n';
-                        config += '          {\n';
-                        config += '            disable = false;\n';
-                        config += '            type = "file";\n';
-                        config += '            directory = "/recordings";\n';
-                        config += '            filename_template = "recording";\n';
-                        config += '            continuous = false;\n';
-                        config += '            split_on_transmission = true;\n';
-                        config += '            include_freq = true;\n';
-                        config += '            append = false;\n';
-                        config += '            dated_subdirectories = false;\n';
-                        config += '          }\n';
-                        config += '        );\n';
-                        config += '      }\n';
-                        config += '    );\n';
-                        config += '  }\n';
-                        config += ');\n';
-                    } else {
-                        // Multichannel mode configuration
-                        let centerFreq = document.getElementById('center_freq').value;
-                        const sampleRate = parseFloat(document.getElementById('sample_rate').value || 2.4) * 1e6; // Hz
-
-                        if (centerFreq) {
-                            centerFreq = parseFloat(centerFreq) * 1e6; // Hz
-                        } else {
-                            // Calculate optimal center frequency
-                            let maxCount = 0;
-                            let bestCenter = 0;
-                            for (let i = 0; i < freqs.length; i++) {
-                                const low = freqs[i] * 1e6;
-                                const high = low + sampleRate;
-                                const count = freqs.filter(f => f * 1e6 >= low && f * 1e6 <= high).length;
-                                if (count > maxCount) {
-                                    maxCount = count;
-                                    bestCenter = (low + high) / 2;
-                                }
-                            }
-                            centerFreq = bestCenter;
-                        }
-
-                        // Check which frequencies are within bandwidth
-                        const minFreq = centerFreq - sampleRate / 2;
-                        const maxFreq = centerFreq + sampleRate / 2;
-                        const withinBandwidth = freqs.filter(f => f * 1e6 >= minFreq && f * 1e6 <= maxFreq);
-                        if (withinBandwidth.length < freqs.length) {
-                            config += `# Warning: Only ${withinBandwidth.length} of ${freqs.length} frequencies are within the ${sampleRate / 1e6} MHz bandwidth.\n`;
-                        }
-
-                        config += `# Multichannel mode configuration\n`;
-                        config += 'devices:\n';
-                        config += '(\n';
-                        config += '  {\n';
-                        config += '    disable = false;\n';
-                        config += '    type = "rtlsdr";\n';
-                        config += '    index = 0;\n';
-                        config += '    gain = 25.4;\n';
-                        config += '    correction = 0;\n';
-                        config += '    mode = "multichannel";\n';
-                        config += `    sample_rate = ${Math.round(sampleRate)};\n`;
-                        config += `    centerfreq = ${Math.round(centerFreq)}; # [${minFreq}-${maxFreq}]\n`;
-                        config += '    channels:\n';
-                        config += '    (\n';
-                        // Build channel blocks without trailing comma on the last one
-                        for (let i = 0; i < freqData.length; i++) {
-                            const item = freqData[i];
-                            const f = item.freq;
-                            const rowStr = Object.entries(item.data)
-                                .filter(([k]) => k !== 'Freq')
-                                .map(([k, v]) => `${k}=${v}`)
-                                .join(', ');
-                            config += '      {\n';
-                            config += `        # ${f.toFixed(5)} MHz: ${rowStr}\n`;
-                            config += `        disable = false;\n`;
-                            config += `        freq = ${Math.round(f * 1e6)};\n`;
-                            config += '        modulation = "nfm";\n';
-                            config += '        outputs:\n';
-                            config += '        (\n';
-                            config += '          {\n';
-                            config += '            disable = false;\n';
-                            config += '            type = "file";\n';
-                            config += '            directory = "/recordings";\n';
-                            config += '            filename_template = "recording";\n';
-                            config += '            continuous = false;\n';
-                            config += '            split_on_transmission = true;\n';
-                            config += '            include_freq = true;\n';
-                            config += '            append = false;\n';
-                            config += '            dated_subdirectories = false;\n';
-                            config += '          }\n';
-                            config += '        );\n';
-                            config += '      }';
-                            // Add comma only if it's not the last item
-                            if (i < freqData.length - 1) {
-                                config += ',\n';
-                            } else {
-                                config += '\n';
-                            }
-                        }
-                        config += '    );\n';
-                        config += '  }\n';
-                        config += ');\n';
-                    }
-
-                    // Create downloadable file
-                    const blob = new Blob([config], { type: 'text/plain' });
-                    const url = URL.createObjectURL(blob);
-                    const downloadLink = document.getElementById('download_link');
-                    downloadLink.href = url;
-                    downloadLink.download = 'rtlsdr_airband.conf';
-                    downloadLink.style.display = 'block';
-                    downloadLink.textContent = 'Download rtlsdr_airband.conf';
-                },
-                error: function(error) {
-                    alert('Error parsing CSV: ' + error);
+            if (mode === 'scan') {
+                // Scan mode configuration
+                config += '# Scan mode configuration\n';
+                config += '# Frequency data:\n';
+                freqData.forEach(item => {
+                    const f = item.freq;
+                    const rowStr = Object.entries(item.data)
+                        .filter(([k]) => k !== 'Freq')
+                        .map(([k, v]) => `${k}=${v}`)
+                        .join(', ');
+                    config += `# ${f.toFixed(5)} MHz: ${rowStr}\n`;
+                });
+                config += 'devices:\n';
+                config += '(\n';
+                config += '  {\n';
+                config += '    disable = false;\n';
+                config += '    type = "rtlsdr";\n';
+                config += '    index = 0;\n';
+                config += '    gain = 25.4;\n';
+                config += '    correction = 0;\n';
+                config += '    mode = "scan";\n';
+                config += '    channels:\n';
+                config += '    (\n';
+                config += '      {\n';
+                config += '        freqs = (' + freqs.map(f => Math.round(f * 1e6)).join(', ') + ');\n';
+                config += '        modulation = "nfm";\n';
+                config += '        outputs:\n';
+                config += '        (\n';
+                config += '          {\n';
+                config += '            disable = false;\n';
+                config += '            type = "file";\n';
+                config += '            directory = "/recordings";\n';
+                config += '            filename_template = "recording";\n';
+                config += '            continuous = false;\n';
+                config += '            split_on_transmission = true;\n';
+                config += '            include_freq = true;\n';
+                config += '            append = false;\n';
+                config += '            dated_subdirectories = false;\n';
+                config += '          }\n';
+                config += '        );\n';
+                config += '      }\n';
+                config += '    );\n';
+                config += '  }\n';
+                config += ');\n';
+            } else {
+                // Multichannel mode configuration
+                let centerFreq = document.getElementById('center_freq').value;
+                const sampleRate = parseFloat(document.getElementById('sample_rate').value || 2.4) * 1e6; // Hz
+                
+                if (!centerFreq) {
+                    calculateAndSetCenterFreq();
+                    centerFreq = document.getElementById('center_freq').value;
                 }
-            });
+                centerFreq = parseFloat(centerFreq) * 1e6; // Hz
+                
+                // Check which frequencies are within bandwidth
+                const minFreq = centerFreq - sampleRate / 2;
+                const maxFreq = centerFreq + sampleRate / 2;
+                const withinBandwidth = freqData.filter(item => item.freq * 1e6 >= minFreq && item.freq * 1e6 <= maxFreq);
+                if (withinBandwidth.length < freqData.length) {
+                    const warning = `Warning: Only ${withinBandwidth.length} of ${freqData.length} frequencies are within the ${sampleRate / 1e6} MHz bandwidth centered at ${(centerFreq / 1e6).toFixed(3)} MHz.`;
+                    config += `# ${warning}\n`;
+                    document.getElementById('message').textContent = warning;
+                }
+
+                config += `# Multichannel mode configuration\n`;
+                config += 'devices:\n';
+                config += '(\n';
+                config += '  {\n';
+                config += '    disable = false;\n';
+                config += '    type = "rtlsdr";\n';
+                config += '    index = 0;\n';
+                config += '    gain = 25.4;\n';
+                config += '    correction = 0;\n';
+                config += '    mode = "multichannel";\n';
+                config += `    sample_rate = ${Math.round(sampleRate)};\n`;
+                config += `    centerfreq = ${Math.round(centerFreq)}; # [${minFreq}-${maxFreq}]\n`;
+                config += '    channels:\n';
+                config += '    (\n';
+                // Build channel blocks without trailing comma on the last one
+                for (let i = 0; i < freqData.length; i++) {
+                    const item = freqData[i];
+                    const f = item.freq;
+                    const rowStr = Object.entries(item.data)
+                        .filter(([k]) => k !== 'Freq')
+                        .map(([k, v]) => `${k}=${v}`)
+                        .join(', ');
+                    config += '      {\n';
+                    config += `        # ${f.toFixed(5)} MHz: ${rowStr}\n`;
+                    config += `        disable = false;\n`;
+                    config += `        freq = ${Math.round(f * 1e6)};\n`;
+                    config += '        modulation = "nfm";\n';
+                    config += '        outputs:\n';
+                    config += '        (\n';
+                    config += '          {\n';
+                    config += '            disable = false;\n';
+                    config += '            type = "file";\n';
+                    config += '            directory = "/recordings";\n';
+                    config += '            filename_template = "recording";\n';
+                    config += '            continuous = false;\n';
+                    config += '            split_on_transmission = true;\n';
+                    config += '            include_freq = true;\n';
+                    config += '            append = false;\n';
+                    config += '            dated_subdirectories = false;\n';
+                    config += '          }\n';
+                    config += '        );\n';
+                    config += '      }';
+                    // Add comma only if it's not the last item
+                    if (i < freqData.length - 1) {
+                        config += ',\n';
+                    } else {
+                        config += '\n';
+                    }
+                }
+                config += '    );\n';
+                config += '  }\n';
+                config += ');\n';
+            }
+
+            // Create downloadable file
+            const blob = new Blob([config], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const downloadLink = document.getElementById('download_link');
+            downloadLink.href = url;
+            downloadLink.download = 'rtlsdr_airband.conf';
+            downloadLink.style.display = 'block';
+            downloadLink.textContent = 'Download rtlsdr_airband.conf';
+                
         }
+
+        // Attach the generateConfig function to the button (assuming button id='generate')
+        document.getElementById('generate').addEventListener('click', generateConfig);
+
     </script>
 </body>
 </html>
